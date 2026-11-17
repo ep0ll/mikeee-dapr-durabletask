@@ -7079,6 +7079,7 @@ mod backend {
             EventType::EventRaised(proto::EventRaisedEvent {
                 name: name.to_string(),
                 input: input.map(str::to_string),
+                failure_details: None,
             }),
         )
     }
@@ -10818,9 +10819,10 @@ mod scenarios {
 mod client_options {
     use std::time::Duration;
 
-    use dapr_durabletask::api::{OrchestrationStatus, PurgeInstanceFilter};
+    use dapr_durabletask::api::{FailureDetails, OrchestrationStatus, PurgeInstanceFilter};
     use dapr_durabletask::client::{
-        FetchOptions, PurgeOptions, RaiseEventOptions, RerunOptions, ResumeOptions, SuspendOptions,
+        FetchOptions, PurgeOptions, RaiseErrorOptions, RaiseEventOptions, RerunOptions,
+        ResumeOptions, SuspendOptions,
         TaskHubGrpcClient, TerminateOptions,
     };
     use dapr_durabletask::task::ActivityContext;
@@ -10849,6 +10851,11 @@ mod client_options {
         worker
             .registry_mut()
             .add_named_orchestrator("echo_event", |ctx| async move {
+                ctx.wait_for_external_event("go").await
+            });
+        worker
+            .registry_mut()
+            .add_named_orchestrator("echo_error", |ctx| async move {
                 ctx.wait_for_external_event("go").await
             });
         worker
@@ -10968,6 +10975,43 @@ mod client_options {
             completed(&mut client, &id).await.as_deref(),
             Some("\"payload\"")
         );
+        guard.stop().await;
+    }
+
+    #[tokio::test]
+    async fn raise_error_options_fail_the_matching_external_event_wait() {
+        setup!(env);
+        let guard = WorkerGuard::start(worker(&env));
+        let mut client = env.new_client().await;
+        let id = client
+            .schedule_new_orchestration("echo_error", None, None, None)
+            .await
+            .unwrap();
+        eventually(&mut client, &id, OrchestrationStatus::Running).await;
+
+        client
+            .raise_orchestration_error_with_options(
+                &id,
+                "go",
+                RaiseErrorOptions::new().with_failure_details(FailureDetails {
+                    message: "approval rejected".into(),
+                    error_type: "ApprovalRejected".into(),
+                    stack_trace: Some("at workflow.rs:42".into()),
+                }),
+            )
+            .await
+            .unwrap();
+
+        let state = client
+            .wait_for_orchestration_completion(&id, true, Some(WAIT))
+            .await
+            .unwrap()
+            .expect("state");
+        assert_eq!(state.runtime_status, OrchestrationStatus::Failed);
+        let details = state.failure_details.expect("failure details missing");
+        assert_eq!(details.error_type, "ApprovalRejected");
+        assert_eq!(details.message, "approval rejected");
+        assert_eq!(details.stack_trace.as_deref(), Some("at workflow.rs:42"));
         guard.stop().await;
     }
 

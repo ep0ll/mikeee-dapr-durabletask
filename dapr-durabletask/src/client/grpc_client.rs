@@ -1,14 +1,14 @@
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
-use crate::api::{DurableTaskError, OrchestrationState, PurgeInstanceFilter, Result};
+use crate::api::{DurableTaskError, FailureDetails, OrchestrationState, PurgeInstanceFilter, Result};
 use crate::internal;
 use crate::proto;
 use crate::proto::task_hub_sidecar_service_client::TaskHubSidecarServiceClient;
 
 use super::options::{
     ClientOptions, FetchOptions, ListInstanceIdsOptions, NewOrchestrationOptions, PurgeOptions,
-    RaiseEventOptions, RerunOptions, ResumeOptions, SuspendOptions, TerminateOptions,
-    validate_task_router,
+    RaiseErrorOptions, RaiseEventOptions, RerunOptions, ResumeOptions, SuspendOptions,
+    TerminateOptions, validate_task_router,
 };
 
 /// One page of instance IDs returned by
@@ -437,6 +437,66 @@ impl TaskHubGrpcClient {
         let request = options.to_request(instance_id, event_name);
         validate_task_router(request.router.as_ref())?;
         self.inner.raise_event(request).await?;
+        Ok(())
+    }
+
+    /// Fail the oldest matching external-event wait in an orchestration instance.
+    ///
+    /// # Errors
+    /// Returns an error if the instance ID, event name, or failure details are
+    /// invalid, or if the sidecar RPC fails.
+    pub async fn raise_orchestration_error(
+        &mut self,
+        instance_id: &str,
+        event_name: &str,
+        failure_details: FailureDetails,
+    ) -> Result<()> {
+        let options = RaiseErrorOptions::new().with_failure_details(failure_details);
+        self.raise_orchestration_error_with_options(instance_id, event_name, options)
+            .await
+    }
+
+    /// Fail the oldest matching external-event wait with the given options
+    /// (failure details and app-id routing).
+    ///
+    /// The failure is buffered if the workflow has not registered a matching
+    /// external-event wait yet.
+    ///
+    /// # Errors
+    /// Same as raise_orchestration_error.
+    pub async fn raise_orchestration_error_with_options(
+        &mut self,
+        instance_id: &str,
+        event_name: &str,
+        options: RaiseErrorOptions,
+    ) -> Result<()> {
+        internal::validate_identifier(
+            instance_id,
+            "instance ID",
+            self.options.max_identifier_length,
+        )?;
+        internal::validate_identifier(
+            event_name,
+            "event name",
+            self.options.max_identifier_length,
+        )?;
+        let details = options.failure_details.as_ref().ok_or_else(|| {
+            DurableTaskError::Other("workflow failure details are required".to_string())
+        })?;
+        if details.error_type.trim().is_empty() {
+            return Err(DurableTaskError::Other(
+                "workflow failure error type is required".to_string(),
+            ));
+        }
+        tracing::info!(
+            instance_id = %instance_id,
+            event_name = %event_name,
+            error_type = %details.error_type,
+            "Raising orchestration error"
+        );
+        let request = options.to_request(instance_id, event_name);
+        validate_task_router(request.router.as_ref())?;
+        self.inner.raise_error(request).await?;
         Ok(())
     }
 

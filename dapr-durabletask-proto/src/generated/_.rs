@@ -746,12 +746,14 @@ pub struct EventSentEvent {
     pub input: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[allow(clippy::all)]
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventRaisedEvent {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "3")]
+    pub failure_details: ::core::option::Option<TaskFailureDetails>,
 }
 #[allow(clippy::all)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1461,7 +1463,7 @@ pub struct GetInstanceResponse {
     pub workflow_state: ::core::option::Option<WorkflowState>,
 }
 #[allow(clippy::all)]
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RaiseEventRequest {
     #[prost(string, tag = "1")]
     pub instance_id: ::prost::alloc::string::String,
@@ -1473,6 +1475,8 @@ pub struct RaiseEventRequest {
     /// by another app. sourceAppID is stamped by the sidecar, not the client.
     #[prost(message, optional, tag = "4")]
     pub router: ::core::option::Option<TaskRouter>,
+    #[prost(message, optional, tag = "5")]
+    pub failure_details: ::core::option::Option<TaskFailureDetails>,
 }
 #[allow(clippy::all)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2001,7 +2005,7 @@ pub mod task_hub_sidecar_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Raises an event to a running workflow instance.
+        /// Raises an error to the matching external-event wait in a workflow instance.
         pub async fn raise_event(
             &mut self,
             request: impl tonic::IntoRequest<super::RaiseEventRequest>,
@@ -2024,6 +2028,30 @@ pub mod task_hub_sidecar_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("TaskHubSidecarService", "RaiseEvent"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn raise_error(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RaiseEventRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RaiseEventResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/TaskHubSidecarService/RaiseError",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("TaskHubSidecarService", "RaiseError"));
             self.inner.unary(req, path, codec).await
         }
         /// Terminates a running workflow instance.

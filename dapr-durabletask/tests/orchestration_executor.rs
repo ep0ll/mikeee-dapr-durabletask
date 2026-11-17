@@ -226,6 +226,30 @@ fn make_event_raised(name: &str, input: Option<String>) -> proto::HistoryEvent {
         event_type: Some(EventType::EventRaised(proto::EventRaisedEvent {
             name: name.to_string(),
             input,
+            failure_details: None,
+        })),
+    }
+}
+
+fn make_event_raised_with_failure(
+    name: &str,
+    error_type: &str,
+    error_message: &str,
+) -> proto::HistoryEvent {
+    proto::HistoryEvent {
+        event_id: -1,
+        timestamp: Some(to_timestamp(ts_now())),
+        router: None,
+        event_type: Some(EventType::EventRaised(proto::EventRaisedEvent {
+            name: name.to_string(),
+            input: None,
+            failure_details: Some(proto::TaskFailureDetails {
+                error_type: error_type.to_string(),
+                error_message: error_message.to_string(),
+                stack_trace: Some("at workflow.rs:42".to_string()),
+                inner_failure: None,
+                is_non_retriable: false,
+            }),
         })),
     }
 }
@@ -835,6 +859,62 @@ async fn test_external_event_buffered() {
     assert_eq!(cw.result, Some("\"pre-buffered\"".to_string()));
 }
 
+#[tokio::test]
+async fn test_external_event_failure_received() {
+    let orch_fn: OrchestratorFn = Arc::new(|ctx| {
+        Box::pin(async move {
+            ctx.wait_for_external_event("approval").await?;
+            Ok(None)
+        })
+    });
+
+    let resp = run_executor(
+        &orch_fn,
+        vec![make_workflow_started(ts_now())],
+        vec![
+            make_execution_started("test_orch", None),
+            make_event_raised_with_failure("approval", "ApprovalRejected", "request denied"),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let cw = get_complete_action(&resp.actions).expect("should have CompleteWorkflow");
+    assert_eq!(cw.workflow_status, proto::OrchestrationStatus::Failed as i32);
+    let details = cw.failure_details.as_ref().expect("failure details missing");
+    assert_eq!(details.error_type, "ApprovalRejected");
+    assert_eq!(details.error_message, "request denied");
+    assert_eq!(details.stack_trace.as_deref(), Some("at workflow.rs:42"));
+}
+
+#[tokio::test]
+async fn test_external_event_failure_buffered_during_replay() {
+    let orch_fn: OrchestratorFn = Arc::new(|ctx| {
+        Box::pin(async move {
+            ctx.wait_for_external_event("approval").await?;
+            Ok(None)
+        })
+    });
+
+    let resp = run_executor(
+        &orch_fn,
+        vec![
+            make_workflow_started(ts_now()),
+            make_execution_started("test_orch", None),
+            make_event_raised_with_failure("approval", "ApprovalRejected", ""),
+        ],
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    let cw = get_complete_action(&resp.actions).expect("should have CompleteWorkflow");
+    assert_eq!(cw.workflow_status, proto::OrchestrationStatus::Failed as i32);
+    let details = cw.failure_details.as_ref().expect("failure details missing");
+    assert_eq!(details.error_type, "ApprovalRejected");
+    assert_eq!(details.error_message, "");
+    assert_eq!(details.stack_trace.as_deref(), Some("at workflow.rs:42"));
+}
 #[tokio::test]
 async fn test_external_event_case_insensitive() {
     let orch_fn: OrchestratorFn = Arc::new(|ctx| {
@@ -4490,6 +4570,7 @@ mod task_executor {
             EventType::EventRaised(proto::EventRaisedEvent {
                 name: name.to_string(),
                 input: input.map(str::to_string),
+                failure_details: None,
             }),
         )
     }
@@ -7449,6 +7530,7 @@ mod replay_properties {
                     EventType::EventRaised(proto::EventRaisedEvent {
                         name: name.to_string(),
                         input: json(i as i64 + 1),
+                        failure_details: None,
                     }),
                     ts,
                 )

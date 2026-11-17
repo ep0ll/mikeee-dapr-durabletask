@@ -58,16 +58,18 @@
           ];
 
           shellHook = ''
-            # Build the durabletask-go sidecar into tmp/ if not already present.
+            # Build the RaiseError-capable durabletask-go sidecar into tmp/.
             # Set DURABLETASK_SKIP_SIDECAR=1 to skip.
-            SIDECAR_BIN="$PWD/tmp/durabletask-sidecar"
+            ROOT="$PWD"
+            SIDECAR_BIN="$ROOT/tmp/durabletask-sidecar"
             if [ "''${DURABLETASK_SKIP_SIDECAR:-}" = "1" ]; then
               echo "Skipping durabletask-go sidecar build (DURABLETASK_SKIP_SIDECAR=1)"
             elif [ ! -f "$SIDECAR_BIN" ]; then
-              echo "Building durabletask-go sidecar..."
-              mkdir -p "$PWD/tmp"
-              GOPATH="$PWD/tmp/go" go install github.com/dapr/durabletask-go@latest
-              cp "$PWD/tmp/go/bin/durabletask-go" "$SIDECAR_BIN"
+              echo "Building RaiseError-capable durabletask-go sidecar..."
+              mkdir -p "$ROOT/tmp"
+              git clone --depth 1 --branch feat/workflow-raise-error \
+                https://github.com/ep0ll/dapr-durabletask-go.git "$ROOT/tmp/durabletask-go"
+              (cd "$ROOT/tmp/durabletask-go" && GOPATH="$ROOT/tmp/go" go build -o "$SIDECAR_BIN" .)
               echo "Sidecar built: $SIDECAR_BIN"
             fi
             export DURABLETASK_SIDECAR_BIN="$SIDECAR_BIN"

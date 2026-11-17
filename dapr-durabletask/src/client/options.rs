@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use crate::api::{DurableTaskError, Result};
+use crate::api::{DurableTaskError, FailureDetails, Result};
 use crate::internal;
 use crate::proto;
 
@@ -406,6 +406,57 @@ impl RaiseEventOptions {
             name: event_name.to_string(),
             input: self.data.clone(),
             router: router_for(self.app_id.as_deref()),
+            failure_details: None,
+        }
+    }
+}
+
+/// Options for raising an error to an external-event wait.
+#[derive(Debug, Clone, Default)]
+pub struct RaiseErrorOptions {
+    /// Structured failure details delivered to the matching external-event wait.
+    pub failure_details: Option<FailureDetails>,
+    /// Raise the error on the instance owned by the app with this app ID.
+    pub app_id: Option<String>,
+}
+
+impl RaiseErrorOptions {
+    /// Create options with default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the structured failure details.
+    pub fn with_failure_details(mut self, failure_details: FailureDetails) -> Self {
+        self.failure_details = Some(failure_details);
+        self
+    }
+
+    /// Target the instance owned by the app with the given app ID.
+    pub fn with_app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = Some(app_id.into());
+        self
+    }
+
+    pub(crate) fn to_request(
+        &self,
+        instance_id: &str,
+        event_name: &str,
+    ) -> proto::RaiseEventRequest {
+        proto::RaiseEventRequest {
+            instance_id: instance_id.to_string(),
+            name: event_name.to_string(),
+            input: None,
+            router: router_for(self.app_id.as_deref()),
+            failure_details: self.failure_details.as_ref().map(|details| {
+                proto::TaskFailureDetails {
+                    error_type: details.error_type.clone(),
+                    error_message: details.message.clone(),
+                    stack_trace: details.stack_trace.clone(),
+                    inner_failure: None,
+                    is_non_retriable: false,
+                }
+            }),
         }
     }
 }
@@ -873,6 +924,30 @@ mod tests {
         assert_eq!(opts.max_grpc_message_size, Some(8 * 1024 * 1024));
         assert_eq!(opts.keepalive_interval, Some(Duration::from_secs(60)));
         assert_eq!(opts.keepalive_timeout, Some(Duration::from_secs(20)));
+    }
+
+    #[test]
+    fn raise_error_options_carry_failure_details_and_router() {
+        let req = RaiseErrorOptions::new()
+            .with_failure_details(FailureDetails {
+                message: "".into(),
+                error_type: "ApprovalRejected".into(),
+                stack_trace: Some("at workflow.rs:42".into()),
+            })
+            .with_app_id("app2")
+            .to_request("instance", "approval");
+
+        assert_eq!(req.instance_id, "instance");
+        assert_eq!(req.name, "approval");
+        assert!(req.input.is_none());
+        let details = req.failure_details.expect("failure details missing");
+        assert_eq!(details.error_type, "ApprovalRejected");
+        assert_eq!(details.error_message, "");
+        assert_eq!(details.stack_trace.as_deref(), Some("at workflow.rs:42"));
+        assert_eq!(
+            req.router.and_then(|router| router.target_app_id).as_deref(),
+            Some("app2")
+        );
     }
 
     mod router_options {

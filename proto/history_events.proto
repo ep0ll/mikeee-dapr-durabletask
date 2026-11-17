@@ -212,6 +212,9 @@ message EventSentEvent {
 message EventRaisedEvent {
     string name = 1;
     google.protobuf.StringValue input = 2;
+
+    // Structured failure details that fail the matching external-event wait.
+    TaskFailureDetails failureDetails = 3;
 }
 
 message ContinueAsNewEvent {

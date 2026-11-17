@@ -1071,11 +1071,16 @@ impl OrchestrationContext {
             if events.is_empty() {
                 inner.buffered_events.remove(&event_name);
             }
-            let data = match buffered.event.event_type {
-                Some(proto::history_event::EventType::EventRaised(e)) => e.input,
-                _ => None,
-            };
-            task.complete_with_phase(data, buffered.during_replay);
+            match buffered.event.event_type {
+                Some(proto::history_event::EventType::EventRaised(e)) => {
+                    if let Some(details) = e.failure_details.as_ref() {
+                        task.fail_with_phase(FailureDetails::from(details), buffered.during_replay);
+                    } else {
+                        task.complete_with_phase(e.input, buffered.during_replay);
+                    }
+                }
+                _ => task.complete_with_phase(None, buffered.during_replay),
+            }
             return (task, true);
         }
 
@@ -1507,6 +1512,7 @@ mod tests {
                 proto::EventRaisedEvent {
                     name: name.to_string(),
                     input: Some(input.to_string()),
+                    failure_details: None,
                 },
             )),
         }

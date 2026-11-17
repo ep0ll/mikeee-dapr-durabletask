@@ -97,6 +97,7 @@ pub fn new_event_raised_event(name: &str, input: Option<&str>) -> HistoryEvent {
     event.event_type = Some(EventType::EventRaised(EventRaisedEvent {
         name: name.to_string(),
         input: input.map(|s| s.to_string()),
+        failure_details: None,
     }));
     event
 }

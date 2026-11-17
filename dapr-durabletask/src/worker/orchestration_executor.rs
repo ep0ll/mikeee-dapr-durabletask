@@ -740,7 +740,11 @@ impl OrchestrationExecutor {
                 if task.is_complete() {
                     continue;
                 }
-                task.complete_with_phase(e.input.clone(), during_replay);
+                if let Some(details) = e.failure_details.as_ref() {
+                    task.fail_with_phase(FailureDetails::from(details), during_replay);
+                } else {
+                    task.complete_with_phase(e.input.clone(), during_replay);
+                }
                 if tasks.is_empty() {
                     inner.pending_event_tasks.remove(&event_name);
                 }
@@ -1336,6 +1340,7 @@ mod tests {
                 event_type: Some(EventType::EventRaised(proto::EventRaisedEvent {
                     name: "approval".to_string(),
                     input: Some("\"yes\"".to_string()),
+                    failure_details: None,
                 })),
             },
         ];

@@ -154,12 +154,95 @@ fn write_mod_rs(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Apply the local RaiseError wire extension until it is available in the shared
+/// durabletask-protobuf schema.
+fn apply_raise_error_extensions(proto_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fn replace_once(
+        content: &str,
+        marker: &str,
+        replacement: &str,
+        name: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if content.contains(replacement) {
+            return Ok(content.to_string());
+        }
+        if !content.contains(marker) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("could not apply local RaiseError extension: {name}"),
+            )
+            .into());
+        }
+        Ok(content.replacen(marker, replacement, 1))
+    }
+
+    let service_path = proto_dir.join("orchestrator_service.proto");
+    let service = std::fs::read_to_string(&service_path)?;
+    let service = replace_once(
+        &service,
+        concat!(
+            "    optional TaskRouter router = 4;\n",
+            "}\n\n",
+            "message RaiseEventResponse {",
+        ),
+        concat!(
+            "    optional TaskRouter router = 4;\n",
+            "\n",
+            "    // Structured failure details for RaiseError. Must not be combined with input.\n",
+            "    TaskFailureDetails failureDetails = 5;\n",
+            "}\n\n",
+            "message RaiseEventResponse {",
+        ),
+        "RaiseEventRequest.failureDetails",
+    )?;
+    let service = replace_once(
+        &service,
+        concat!(
+            "    rpc RaiseEvent(RaiseEventRequest) returns (RaiseEventResponse);\n\n",
+            "    // Terminates a running workflow instance.",
+        ),
+        concat!(
+            "    rpc RaiseEvent(RaiseEventRequest) returns (RaiseEventResponse);\n\n",
+            "    // Raises an error to the matching external-event wait in a workflow instance.\n",
+            "    rpc RaiseError(RaiseEventRequest) returns (RaiseEventResponse);\n\n",
+            "    // Terminates a running workflow instance.",
+        ),
+        "TaskHubSidecarService.RaiseError",
+    )?;
+    std::fs::write(service_path, service)?;
+
+    let history_path = proto_dir.join("history_events.proto");
+    let history = std::fs::read_to_string(&history_path)?;
+    let history = replace_once(
+        &history,
+        concat!(
+            "message EventRaisedEvent {\n",
+            "    string name = 1;\n",
+            "    google.protobuf.StringValue input = 2;\n",
+            "}",
+        ),
+        concat!(
+            "message EventRaisedEvent {\n",
+            "    string name = 1;\n",
+            "    google.protobuf.StringValue input = 2;\n\n",
+            "    // Structured failure details that fail the matching external-event wait.\n",
+            "    TaskFailureDetails failureDetails = 3;\n",
+            "}",
+        ),
+        "EventRaisedEvent.failureDetails",
+    )?;
+    std::fs::write(history_path, history)?;
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let proto_dir = workspace_root.join("proto");
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/generated");
 
     let proto_files = fetch_protos(&proto_dir)?;
+    apply_raise_error_extensions(&proto_dir)?;
     if proto_files.is_empty() {
         return Err("no .proto files found upstream".into());
     }
